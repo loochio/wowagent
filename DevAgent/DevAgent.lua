@@ -8,7 +8,7 @@ local ADDON_NAME = ...
 -- Bump this string from your build/sync step (e.g. stamp it with a git SHA or
 -- timestamp) so you can visually confirm in chat that /reload picked up your
 -- latest edit.
-local BUILD_VERSION = "dev-20260923-034028"
+local BUILD_VERSION = "dev-0427d1f-dirty"
 
 DevAgentDB = DevAgentDB or {
     errors = {},

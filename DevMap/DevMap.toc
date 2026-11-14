@@ -1,0 +1,15 @@
+## Interface: 16001
+## Title: DevMap
+## Notes: World map / quest log UI tweaks plus a DevMap section in the All Objectives tracker. Same load/error plumbing as DevAgent.
+## Author: You
+## Version: dev-0.3.0
+## SavedVariables: DevMapDB
+
+# DevMap.lua must stay first: it creates the DevMap namespace that later
+# module files register into.
+DevMap.lua
+map.lua
+tracker.lua
+
+# More modules go here as they land, e.g.:
+# questlog.lua

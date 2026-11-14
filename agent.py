@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-DevAgent sync/watch script for a live-developed WoW addon.
+DevAgent/DevMap sync/watch script for live-developed WoW addons.
 
 What it does:
-  1. Watches your source folder for .lua / .toc changes.
-  2. On change: stamps a fresh BUILD_VERSION into DevAgent.lua (git SHA if
-     available, else a timestamp), and — if you are NOT using a symlink —
-     copies the files into the live AddOns folder.
-  3. Prints a reminder to /reload in-game.
-  4. Watches the addon's SavedVariables file (only written by WoW on
-     logout/UI-reload) and, when it changes, prints any new entries in
-     DevAgentDB.errors and DevAgentDB.loadHistory so you get instant
-     feedback in this terminal without tabbing into the game.
+  1. Watches each addon folder in REPO_DIR for .lua / .toc changes.
+  2. On change: stamps a fresh BUILD_VERSION into <Addon>.lua (git SHA if
+     available, else a timestamp), then mirrors the changed files into the
+     live "_forever_" AddOns folder. When the live folder is a junction to
+     the repo, the edit is already live and it says so instead of copying.
+  3. Logs every file it touches and where it went.
+  4. Watches DevAgent's SavedVariables file (written by WoW on logout or UI
+     reload) and prints new DevAgentDB.errors / DevAgentDB.loadHistory entries,
+     so you get feedback without tabbing into the game.
 
 Setup:
   1. pip install watchdog
@@ -19,58 +19,93 @@ Setup:
   3. Run: python agent.py
 """
 
+import os
 import re
+import shutil
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 # ----------------------------- CONFIG --------------------------------------
 
-# Folder containing DevAgent.toc / DevAgent.lua that you actually edit.
-SOURCE_DIR = Path(r"E:\dev\wowagent\DevAgent")
+# Repo folder that holds one sub-folder per addon.
+REPO_DIR = Path(r"E:\dev\wowagent")
 
-# Live AddOns folder for the addon. If you symlinked SOURCE_DIR directly into
-# AddOns, set USE_SYMLINK = True and this path is ignored for syncing (only
-# used to help you set the symlink up once, see README note below).
-ADDON_DIR = Path(
-    r"E:\Games\World of Warcraft\_classic_beta_\Interface\AddOns\DevAgent"
-)
-USE_SYMLINK = True
+# Root of your WoW install (the folder containing "_retail_", "_forever_", ...).
+WOW_ROOT = Path(r"E:\Games\World of Warcraft")
+
+# Install flavor you develop against. Forever installs into "_forever_".
+WOW_FLAVOR = "_forever_"
+
+# Addon folder names under REPO_DIR that get mirrored into the live AddOns dir.
+ADDON_NAMES = ["DevAgent", "DevMap"]
 
 # Your WoW account folder name under WTF\Account\<THIS>. It's the folder
 # name shown in your WTF\Account directory, not your Battle.net email.
-WOW_ACCOUNT_NAME = "50168625#2"
+WOW_ACCOUNT_NAME = "50168625#1"
 
-# Root of your WoW install (the folder containing "_retail_").
-WOW_ROOT = Path(r"E:\Games\World of Warcraft")
-
-SAVEDVARS_PATH = (
-    WOW_ROOT / "_classic_beta_" / "WTF" / "Account" / WOW_ACCOUNT_NAME
-    / "SavedVariables" / "DevAgent.lua"
-)
-
+WATCH_SUFFIXES = (".lua", ".toc")
 DEBOUNCE_SECONDS = 0.5
 
 # ----------------------------------------------------------------------------
 
-LUA_FILE = SOURCE_DIR / "DevAgent.lua"
+LIVE_ADDONS_DIR = WOW_ROOT / WOW_FLAVOR / "Interface" / "AddOns"
+
+SAVEDVARS_PATH = (
+    WOW_ROOT / WOW_FLAVOR / "WTF" / "Account" / WOW_ACCOUNT_NAME
+    / "SavedVariables" / "DevAgent.lua"
+)
+
 VERSION_RE = re.compile(r'(local BUILD_VERSION = ")[^"]*(")')
 
+
+# ----------------------------- logging -------------------------------------
+
+def log(message: str) -> None:
+    print(f"[agent {datetime.now():%H:%M:%S}] {message}", flush=True)
+
+
+def warn(message: str) -> None:
+    print(f"[agent {datetime.now():%H:%M:%S}] WARNING: {message}", flush=True)
+
+
+# ----------------------------- paths ---------------------------------------
+
+def source_dir(addon: str) -> Path:
+    return REPO_DIR / addon
+
+
+def live_addon_dir(addon: str) -> Path:
+    return LIVE_ADDONS_DIR / addon
+
+
+def is_live_linked(addon: str) -> bool:
+    """True when the live AddOns folder is a symlink/junction to the repo."""
+    src, dst = source_dir(addon), live_addon_dir(addon)
+    try:
+        return dst.exists() and os.path.samefile(src, dst)
+    except OSError:
+        return False
+
+
+# ----------------------------- build stamp ---------------------------------
 
 def get_build_tag() -> str:
     """git short SHA if this is a git repo, else a timestamp."""
     try:
         sha = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"],
-            cwd=SOURCE_DIR, stderr=subprocess.DEVNULL, text=True,
+            cwd=REPO_DIR, stderr=subprocess.DEVNULL, text=True,
         ).strip()
         dirty = subprocess.call(
-            ["git", "diff", "--quiet"], cwd=SOURCE_DIR,
+            ["git", "diff", "--quiet"], cwd=REPO_DIR,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         ) != 0
         return f"dev-{sha}{'-dirty' if dirty else ''}"
@@ -78,49 +113,113 @@ def get_build_tag() -> str:
         return "dev-" + datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
-def stamp_version() -> str:
-    if not LUA_FILE.exists():
-        print(f"[agent] WARNING: {LUA_FILE} not found, skipping stamp.")
-        return ""
+def stamp_version(addon: str) -> Optional[str]:
+    """Rewrite BUILD_VERSION in <addon>.lua. Returns the tag only if we wrote."""
+    lua_file = source_dir(addon) / f"{addon}.lua"
+    if not lua_file.exists():
+        warn(f"{lua_file} not found, skipping build stamp")
+        return None
     tag = get_build_tag()
-    text = LUA_FILE.read_text(encoding="utf-8")
+    text = lua_file.read_text(encoding="utf-8")
     new_text, n = VERSION_RE.subn(rf'\g<1>{tag}\g<2>', text)
     if n == 0:
-        print("[agent] WARNING: BUILD_VERSION line not found in DevAgent.lua")
-    elif new_text != text:
-        LUA_FILE.write_text(new_text, encoding="utf-8")
+        return None  # this addon has no BUILD_VERSION line
+    if new_text == text:
+        return None  # already stamped
+    lua_file.write_text(new_text, encoding="utf-8")
     return tag
 
 
-def sync_to_addon_dir():
-    if USE_SYMLINK:
-        return  # nothing to copy, the folder IS the live folder
-    import shutil
-    ADDON_DIR.mkdir(parents=True, exist_ok=True)
-    for f in SOURCE_DIR.glob("*"):
-        if f.is_file():
-            shutil.copy2(f, ADDON_DIR / f.name)
+# ----------------------------- syncing -------------------------------------
 
+def sync_files(addon: str, paths) -> None:
+    dst_dir = live_addon_dir(addon)
+    if is_live_linked(addon):
+        for path in paths:
+            log(f"{addon}: {path.name} is live via junction -> {dst_dir}")
+        return
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    for path in paths:
+        target = dst_dir / path.name
+        shutil.copy2(path, target)
+        log(f"{addon}: copied {path.name} -> {target}")
+
+
+def sync_all(addon: str) -> None:
+    src, dst = source_dir(addon), live_addon_dir(addon)
+    if is_live_linked(addon):
+        log(f"{addon}: live via junction -> {dst} (no copy needed)")
+        return
+    dst.mkdir(parents=True, exist_ok=True)
+    for path in sorted(src.glob("*")):
+        if path.is_file() and path.suffix.lower() in WATCH_SUFFIXES:
+            shutil.copy2(path, dst / path.name)
+            log(f"{addon}: copied {path.name} -> {dst / path.name}")
+
+
+# ----------------------------- file watcher --------------------------------
 
 class SourceChangeHandler(FileSystemEventHandler):
-    def __init__(self):
-        self._last = 0.0
+    def __init__(self, addon: str):
+        self.addon = addon
+        self._lock = threading.Lock()
+        self._pending = {}
+        self._timer = None
+        self._suppress_until = {}
 
-    def on_modified(self, event):
+    def on_any_event(self, event) -> None:
         if event.is_directory:
             return
-        if not event.src_path.endswith((".lua", ".toc")):
+        if event.event_type not in ("created", "modified", "moved"):
             return
-        now = time.time()
-        if now - self._last < DEBOUNCE_SECONDS:
+        path = Path(event.dest_path if event.event_type == "moved" else event.src_path)
+        if path.suffix.lower() not in WATCH_SUFFIXES:
             return
-        self._last = now
-        tag = stamp_version()
-        sync_to_addon_dir()
-        print(f"[agent] synced, build {tag} -> /reload in-game to pick it up")
+
+        with self._lock:
+            # Ignore the write we just did when stamping BUILD_VERSION.
+            until = self._suppress_until.get(path)
+            if until is not None:
+                if time.monotonic() < until:
+                    return
+                self._suppress_until.pop(path, None)
+
+            self._pending[path] = True
+            if self._timer is not None:
+                self._timer.cancel()
+            self._timer = threading.Timer(DEBOUNCE_SECONDS, self._flush)
+            self._timer.daemon = True
+            self._timer.start()
+
+    def _suppress(self, path: Path, seconds: float = 1.0) -> None:
+        with self._lock:
+            self._suppress_until[path] = time.monotonic() + seconds
+
+    def _flush(self) -> None:
+        with self._lock:
+            paths = sorted(self._pending)
+            self._pending.clear()
+            self._timer = None
+        if not paths:
+            return
+
+        for path in paths:
+            log(f"{self.addon}: changed {path}")
+
+        lua_file = source_dir(self.addon) / f"{self.addon}.lua"
+        if lua_file in paths:
+            # Mark the path before we write, so the write's own event can't
+            # queue a second, empty update.
+            self._suppress(lua_file)
+            tag = stamp_version(self.addon)
+            if tag:
+                log(f"{self.addon}: stamped BUILD_VERSION -> {tag}")
+
+        sync_files(self.addon, paths)
+        log(f"{self.addon}: /reload in-game to pick it up")
 
 
-# ------------------------- SavedVariables tail -------------------------
+# ------------------------- SavedVariables tail -----------------------------
 
 _ERROR_ENTRY_RE = re.compile(
     r'\["time"\]\s*=\s*"([^"]*)".*?\["message"\]\s*=\s*"((?:[^"\\]|\\.)*)"',
@@ -178,32 +277,37 @@ class SavedVarsHandler(FileSystemEventHandler):
 
         for t, msg in errors[self.seen_errors:]:
             msg = msg.replace('\\"', '"').replace("\\n", "\n")
-            print(f"[wow-error] {t}  {msg}")
+            print(f"[wow-error] {t}  {msg}", flush=True)
         for t, ver in loads[self.seen_loads:]:
-            print(f"[wow-load]  {t}  build={ver}")
+            print(f"[wow-load]  {t}  build={ver}", flush=True)
 
         self.seen_errors = len(errors)
         self.seen_loads = len(loads)
 
 
 def main():
-    if not SOURCE_DIR.exists():
-        sys.exit(f"SOURCE_DIR does not exist: {SOURCE_DIR}")
+    missing = [name for name in ADDON_NAMES if not source_dir(name).exists()]
+    if missing:
+        sys.exit(f"addon folder(s) not found: {', '.join(str(source_dir(n)) for n in missing)}")
     if WOW_ACCOUNT_NAME == "YOURACCOUNT":
-        print("[agent] NOTE: set WOW_ACCOUNT_NAME in the CONFIG block before "
-              "SavedVariables tailing will work.")
+        log("NOTE: set WOW_ACCOUNT_NAME in the CONFIG block before "
+            "SavedVariables tailing will work.")
+
+    for name in ADDON_NAMES:
+        sync_all(name)
 
     observer = Observer()
-    observer.schedule(SourceChangeHandler(), str(SOURCE_DIR), recursive=False)
+    for name in ADDON_NAMES:
+        observer.schedule(SourceChangeHandler(name), str(source_dir(name)), recursive=False)
 
     if SAVEDVARS_PATH.parent.exists():
         observer.schedule(SavedVarsHandler(), str(SAVEDVARS_PATH.parent), recursive=False)
     else:
-        print(f"[agent] NOTE: {SAVEDVARS_PATH.parent} doesn't exist yet — "
-              "it's created after the addon loads once in-game.")
+        log(f"NOTE: {SAVEDVARS_PATH.parent} doesn't exist yet — "
+            "it's created after the addon loads once in-game.")
 
     observer.start()
-    print("[agent] watching for changes. Ctrl+C to stop.")
+    log("watching for changes. Ctrl+C to stop.")
     try:
         while True:
             time.sleep(1)

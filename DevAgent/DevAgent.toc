@@ -1,4 +1,4 @@
-## Interface: 110105
+## Interface: 16001
 ## Title: DevAgent
 ## Notes: Basic scaffold addon for testing an automated save/sync/reload dev workflow.
 ## Author: You
