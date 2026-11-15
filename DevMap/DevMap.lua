@@ -8,7 +8,7 @@
 local ADDON_NAME = ...
 
 -- Bumped by the build/sync step so /reload pickup is visible in chat.
-local BUILD_VERSION = "dev-e3dc3c9-dirty"
+local BUILD_VERSION = "dev-55c1f1e-dirty"
 
 DevMapDB = DevMapDB or {
     errors = {},

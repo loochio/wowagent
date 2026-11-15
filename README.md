@@ -44,7 +44,7 @@ A `_` button in the quest log panel's bottom-right corner minimizes the whole De
 
 | Section | Contents |
 |---|---|
-| `Ready For Turn In` | Ready-to-hand-in quests, one block per zone |
+| `Ready For Turn In` | Ready-to-hand-in quests, one block per zone; clicking a quest name opens it in the quest log |
 | `Quest Count` | `quests in log / max quests`, e.g. `24 / 25` |
 
 Both register as tracker modules with `uiOrder` 100/101 and refresh on `QUEST_LOG_UPDATE`.

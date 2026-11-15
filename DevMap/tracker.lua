@@ -30,6 +30,42 @@ local MODULE_EVENTS = {
     "UNIT_QUEST_LOG_CHANGED",
 }
 
+-- Make a quest line clickable: opens that quest in the quest log.
+local function AttachQuestClick(line, questID)
+    local button = line.devMapClickButton
+    if not button then
+        button = CreateFrame("Button", nil, line)
+        button:SetAllPoints(line)
+
+        button:SetScript("OnClick", function(self)
+            local questID = self.devMapQuestID
+            if questID and QuestMapFrame_OpenToQuestDetails then
+                QuestMapFrame_OpenToQuestDetails(questID)
+            end
+        end)
+
+        button:SetScript("OnEnter", function(self)
+            local text = self:GetParent().Text
+            if text then
+                text:SetTextColor(HIGHLIGHT_FONT_COLOR:GetRGB())
+            end
+        end)
+
+        button:SetScript("OnLeave", function(self)
+            local text = self:GetParent().Text
+            local color = OBJECTIVE_TRACKER_COLOR["Normal"]
+            if text and color then
+                text:SetTextColor(color.r, color.g, color.b)
+            end
+        end)
+
+        line.devMapClickButton = button
+    end
+
+    button.devMapQuestID = questID
+    button:Show()
+end
+
 local function LayoutReadyForTurnIn(module)
     local groups = DevMap.GetReadyQuestsByZone and DevMap.GetReadyQuestsByZone() or {}
 
@@ -46,8 +82,9 @@ local function LayoutReadyForTurnIn(module)
         local block = module:GetBlock("zone_" .. tostring(group.key))
         block:SetHeader(group.name)
         for _, quest in ipairs(group.quests) do
-            block:AddObjective(quest.id, quest.title, nil, nil,
+            local line = block:AddObjective(quest.id, quest.title, nil, nil,
                 OBJECTIVE_DASH_STYLE_HIDE, OBJECTIVE_TRACKER_COLOR["Normal"])
+            AttachQuestClick(line, quest.id)
         end
         if not module:LayoutBlock(block) then
             return
