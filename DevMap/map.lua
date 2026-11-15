@@ -1,7 +1,7 @@
 -- map.lua
 -- World map / quest log UI additions.
 --
--- Adds three buttons below the Search bar in the "Map & Quest Log" panel:
+-- Adds three buttons at the bottom of the "Map & Quest Log" panel:
 --   "clear tracking"           -> removes every tracked quest
 --   "Track Current Zone"       -> clears tracking, then tracks quests whose
 --                                 zone matches the zone the player is in
@@ -422,10 +422,11 @@ local function Setup()
         return false
     end
 
-    -- First row: clear + track. Second row: print ready-for-turn-in quests.
-    clearButton:SetPoint("TOPLEFT", searchBox, "BOTTOMLEFT", 0, -BUTTON_GAP)
-    trackButton:SetPoint("TOPLEFT", clearButton, "TOPRIGHT", BUTTON_SPACING, 0)
-    printButton:SetPoint("TOPLEFT", clearButton, "BOTTOMLEFT", 0, -BUTTON_GAP)
+    -- Anchored to the bottom-left of the quest log panel; the print button
+    -- stacks above the other two.
+    clearButton:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", 6, 6)
+    trackButton:SetPoint("BOTTOMLEFT", clearButton, "BOTTOMRIGHT", BUTTON_SPACING, 0)
+    printButton:SetPoint("BOTTOMLEFT", clearButton, "TOPLEFT", 0, BUTTON_GAP)
 
     local frameLevel = searchBox:GetFrameLevel() + 5
     clearButton:SetFrameLevel(frameLevel)
