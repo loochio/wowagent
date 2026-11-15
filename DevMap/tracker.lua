@@ -1,20 +1,14 @@
 -- tracker.lua
--- Adds a "Ready For Turn In" section to the All Objectives (objective tracker)
--- UI, listing ready-to-turn-in quests grouped by zone. The zone grouping is
--- shared with the "print ready for turn in" button
--- (DevMap.GetReadyQuestsByZone).
+-- Adds sections to the All Objectives (objective tracker) UI:
+--   "Ready For Turn In" -> ready-to-turn-in quests grouped by zone
+--   "Quest Count"       -> quests in log / max quests
 --
 -- The tracker is made of modules (one per section: Quests, Campaign, ...).
--- A module is a frame built from ObjectiveTrackerModuleTemplate with a mixin
--- created from ObjectiveTrackerModuleMixin; the manager assigns each module to
--- ObjectiveTrackerFrame and sorts them by uiOrder.
---
--- For now this is scaffolding: header "DevMap" plus one placeholder line.
+-- A module is a frame built from ObjectiveTrackerModuleTemplate; the manager
+-- assigns each module to ObjectiveTrackerFrame and sorts them by uiOrder.
 
 local DevMap = _G.DevMap
 
-local MODULE_NAME = "DevMapObjectiveTracker"
-local MODULE_TITLE = "Ready For Turn In"
 local RETRY_ATTEMPTS = 20 -- 20 x 0.5s, covers the tracker addon loading later
 
 local function Log(msg)
@@ -25,62 +19,88 @@ local function Log(msg)
     end
 end
 
-local function CreateModule()
-    local module = CreateFrame("Frame", MODULE_NAME, ObjectiveTrackerFrame,
-        "ObjectiveTrackerModuleTemplate")
+-- Both sections refresh on quest log changes.
+local MODULE_EVENTS = {
+    "PLAYER_ENTERING_WORLD",
+    "ZONE_CHANGED_NEW_AREA",
+    "QUEST_LOG_UPDATE",
+    "QUEST_WATCH_LIST_CHANGED",
+    "QUEST_TURNED_IN",
+    "QUEST_ACCEPTED",
+    "UNIT_QUEST_LOG_CHANGED",
+}
 
-    module.headerText = MODULE_TITLE
-    module.events = {
-        "PLAYER_ENTERING_WORLD",
-        "ZONE_CHANGED_NEW_AREA",
-        "QUEST_LOG_UPDATE",
-        "QUEST_WATCH_LIST_CHANGED",
-        "QUEST_TURNED_IN",
-        "QUEST_ACCEPTED",
-        "UNIT_QUEST_LOG_CHANGED",
-    }
-    module.uiOrder = 100 -- after the built-in modules (they are 1..11)
+local function LayoutReadyForTurnIn(module)
+    local groups = DevMap.GetReadyQuestsByZone and DevMap.GetReadyQuestsByZone() or {}
 
-    function module:InitModule()
-        -- no module-level state yet
+    if #groups == 0 then
+        local block = module:GetBlock("empty")
+        block:AddObjective("none", "No quests ready to turn in", nil, nil,
+            OBJECTIVE_DASH_STYLE_HIDE, OBJECTIVE_TRACKER_COLOR["Normal"])
+        module:LayoutBlock(block)
+        return
     end
 
-    function module:OnEvent(event, ...)
-        self:MarkDirty()
-    end
-
-    function module:LayoutContents()
-        local groups = DevMap.GetReadyQuestsByZone and DevMap.GetReadyQuestsByZone() or {}
-
-        if #groups == 0 then
-            local block = self:GetBlock("empty")
-            block:AddObjective("none", "No quests ready to turn in", nil, nil,
+    -- One block per zone, zone name as the block header.
+    for _, group in ipairs(groups) do
+        local block = module:GetBlock("zone_" .. tostring(group.key))
+        block:SetHeader(group.name)
+        for _, quest in ipairs(group.quests) do
+            block:AddObjective(quest.id, quest.title, nil, nil,
                 OBJECTIVE_DASH_STYLE_HIDE, OBJECTIVE_TRACKER_COLOR["Normal"])
-            self:LayoutBlock(block)
+        end
+        if not module:LayoutBlock(block) then
             return
         end
-
-        -- One block per zone, zone name as the block header.
-        for _, group in ipairs(groups) do
-            local block = self:GetBlock("zone_" .. tostring(group.key))
-            block:SetHeader(group.name)
-            for _, quest in ipairs(group.quests) do
-                block:AddObjective(quest.id, quest.title, nil, nil,
-                    OBJECTIVE_DASH_STYLE_HIDE, OBJECTIVE_TRACKER_COLOR["Normal"])
-            end
-            if not self:LayoutBlock(block) then
-                return
-            end
-        end
     end
-
-    module:SetHeader(MODULE_TITLE)
-    return module
 end
 
-local function ManagerIsReady()
-    return ObjectiveTrackerManager and ObjectiveTrackerFrame
-        and ObjectiveTrackerManager.containers[ObjectiveTrackerFrame]
+local function LayoutQuestCount(module)
+    if not (C_QuestLog and C_QuestLog.GetNumQuestLogEntries) then
+        return
+    end
+
+    -- The quest log's own counter shows the second return and the accept cap.
+    local _, numQuests = C_QuestLog.GetNumQuestLogEntries()
+    local maxQuests = Constants and Constants.QuestLogConsts
+        and Constants.QuestLogConsts.MAXIMUM_NUM_QUESTS_LOG_CAN_ACCEPT
+        or C_QuestLog.GetMaxNumQuests()
+
+    local block = module:GetBlock("count")
+    block:AddObjective("count", ("%d / %d"):format(numQuests or 0, maxQuests or 0),
+        nil, nil, OBJECTIVE_DASH_STYLE_HIDE, OBJECTIVE_TRACKER_COLOR["Normal"])
+    module:LayoutBlock(block)
+end
+
+local MODULES = {
+    {
+        name = "DevMapObjectiveTracker",
+        title = "Ready For Turn In",
+        uiOrder = 100,
+        layout = LayoutReadyForTurnIn,
+    },
+    {
+        name = "DevMapQuestCountTracker",
+        title = "Quest Count",
+        uiOrder = 101,
+        layout = LayoutQuestCount,
+    },
+}
+
+local function CreateModule(def)
+    local module = CreateFrame("Frame", def.name, ObjectiveTrackerFrame,
+        "ObjectiveTrackerModuleTemplate")
+
+    module.headerText = def.title
+    module.events = MODULE_EVENTS
+    module.uiOrder = def.uiOrder
+
+    function module:LayoutContents()
+        def.layout(self)
+    end
+
+    module:SetHeader(def.title)
+    return module
 end
 
 local function EnsureModule()
@@ -94,13 +114,14 @@ local function EnsureModule()
         return false
     end
 
-    local module = _G[MODULE_NAME]
-    if not module then
-        module = CreateModule()
-    end
-
-    if not ObjectiveTrackerManager:GetContainerForModule(module) then
-        ObjectiveTrackerManager:SetModuleContainer(module, ObjectiveTrackerFrame)
+    for _, def in ipairs(MODULES) do
+        local module = _G[def.name]
+        if not module then
+            module = CreateModule(def)
+        end
+        if not ObjectiveTrackerManager:GetContainerForModule(module) then
+            ObjectiveTrackerManager:SetModuleContainer(module, ObjectiveTrackerFrame)
+        end
     end
     return true
 end

@@ -1,6 +1,6 @@
 ## Interface: 16001
 ## Title: DevMap
-## Notes: World map / quest log UI tweaks plus a DevMap section in the All Objectives tracker. Same load/error plumbing as DevAgent.
+## Notes: World map / quest log UI tweaks plus tracker sections (Ready For Turn In, Quest Count) in All Objectives. Same load/error plumbing as DevAgent.
 ## Author: You
 ## Version: dev-0.3.0
 ## SavedVariables: DevMapDB
