@@ -8,7 +8,7 @@
 local ADDON_NAME = ...
 
 -- Bumped by the build/sync step so /reload pickup is visible in chat.
-local BUILD_VERSION = "dev-da48f2f"
+local BUILD_VERSION = "dev-e3dc3c9-dirty"
 
 DevMapDB = DevMapDB or {
     errors = {},
@@ -45,6 +45,8 @@ local function CaptureError(errMsg)
     while #DevMapDB.errors > 100 do
         table.remove(DevMapDB.errors, 1)
     end
+    -- Echo to chat as well, so the message is copyable without a reload.
+    print("|cffff4444DevMap error:|r " .. tostring(errMsg))
 end
 
 local originalErrorHandler = geterrorhandler()
@@ -100,6 +102,20 @@ SlashCmdList["DEVMAP"] = function(msg)
             for i = math.max(1, #DevMapDB.errors - 4), #DevMapDB.errors do
                 local e = DevMapDB.errors[i]
                 Log(e.time .. " - " .. e.message)
+            end
+        end
+        -- The client's own error frame keeps every Lua error, including ones
+        -- that never reach seterrorhandler (e.g. during addon loading).
+        if ScriptErrorsFrame and ScriptErrorsFrame.GetCount then
+            local count = ScriptErrorsFrame:GetCount()
+            if count > 0 then
+                Log(("-- client errors (%d) --"):format(count))
+                for i = math.max(1, count - 4), count do
+                    local e = ScriptErrorsFrame:GetErrorData(i)
+                    if e and e.message then
+                        Log(("[%d] %s"):format(i, e.message))
+                    end
+                end
             end
         end
     elseif msg == "clear" then

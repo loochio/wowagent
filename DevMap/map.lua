@@ -1,11 +1,12 @@
 -- map.lua
 -- World map / quest log UI additions.
 --
--- Adds three buttons at the bottom of the "Map & Quest Log" panel:
---   "clear tracking"           -> removes every tracked quest
---   "Track Current Zone"       -> clears tracking, then tracks quests whose
---                                 zone matches the zone the player is in
---   "print ready for turn in"  -> lists ready-to-hand-in quests and their zones
+-- Adds two buttons at the bottom of the "Map & Quest Log" panel:
+--   "clear tracking"     -> removes every tracked quest
+--   "Track Current Zone" -> clears tracking, then tracks quests whose
+--                           zone matches the zone the player is in
+-- Plus two checkboxes that toggle the matching objective tracker sections:
+--   "Track - Ready for Turn In" and "Track - Quest Count"
 -- The search box lives at QuestScrollFrame.SearchBox in
 -- Blizzard_UIPanels_Game, which may load on demand, so setup is retried until
 -- it exists.
@@ -14,12 +15,19 @@ local DevMap = _G.DevMap
 
 local BUTTON_MIN_WIDTH = 90
 local BUTTON_HEIGHT = 20
-local BUTTON_GAP = 4 -- between the search bar and the button row
+local BUTTON_GAP = 4 -- vertical gap between the checkbox and the buttons
 local BUTTON_SPACING = 6 -- between the two buttons
+local BOTTOM_INSET = 6 -- padding from the panel's bottom-left corner
+local CHECKBOX_HEIGHT = 32 -- UICheckButtonTemplate is 32x32
+local CHECKBOX_SPACING = 8 -- between the two checkboxes
 
 local CLEAR_BUTTON = "DevMapClearTrackingButton"
 local TRACK_BUTTON = "DevMapTrackZoneButton"
-local PRINT_BUTTON = "DevMapReadyTurnInButton"
+local READY_CHECKBOX = "DevMapReadyCheckbox"
+local COUNT_CHECKBOX = "DevMapQuestCountCheckbox"
+local PANEL_BACKGROUND = "DevMapPanelBackground"
+local MINIMIZE_BUTTON = "DevMapMinimizeButton"
+local MAXIMIZE_BUTTON = "DevMapMaximizeButton"
 
 -- First hit wins. The first entry is the current live layout; the others are
 -- cheap fallbacks in case this client's quest log is built differently.
@@ -318,32 +326,6 @@ end
 -- Shared with the objective tracker module.
 DevMap.GetReadyQuestsByZone = GetReadyQuestsByZone
 
-local function PrintReadyForTurnIn()
-    if not (C_QuestLog and C_QuestLog.GetNumQuestLogEntries) then
-        DevMap:Log("quest log API unavailable.")
-        return
-    end
-
-    local groups = DevMap.GetReadyQuestsByZone()
-    local total = 0
-    for _, group in ipairs(groups) do
-        total = total + #group.quests
-    end
-
-    if total == 0 then
-        DevMap:Log("no quests in your log are ready to turn in.")
-        return
-    end
-
-    DevMap:Log(("%d quest(s) ready to turn in:"):format(total))
-    for _, group in ipairs(groups) do
-        DevMap:Log(group.name)
-        for _, quest in ipairs(group.quests) do
-            DevMap:Log("  " .. quest.title)
-        end
-    end
-end
-
 local function OnClearTracking()
     local cleared = ClearTrackedQuests()
     if cleared == nil then
@@ -408,6 +390,71 @@ local function CreateButton(name, text, parent)
     return button
 end
 
+local function CreateBackground(parent)
+    local existing = _G[PANEL_BACKGROUND]
+    if existing then
+        return existing
+    end
+
+    local ok, background = pcall(CreateFrame, "Frame", PANEL_BACKGROUND, parent,
+        "BackdropTemplate")
+    if not ok or not background then
+        Log("could not create background: " .. tostring(background))
+        return nil
+    end
+
+    background:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 8,
+        insets = { left = 2, right = 2, top = 2, bottom = 2 },
+    })
+    background:SetBackdropColor(0, 0, 0, 1)
+    background:SetBackdropBorderColor(0.35, 0.35, 0.35, 0.8)
+
+    return background
+end
+
+local function CreateToggleButton(name, text, parent)
+    local existing = _G[name]
+    if existing then
+        return existing
+    end
+
+    local ok, button = pcall(CreateFrame, "Button", name, parent, "UIPanelButtonTemplate")
+    if not ok or not button then
+        Log("could not create button: " .. tostring(button))
+        return nil
+    end
+
+    button:SetSize(22, 20)
+    button:SetText(text)
+
+    return button
+end
+
+local function CreateCheckbox(name, label, parent, isChecked, onToggle)
+    local existing = _G[name]
+    if existing then
+        return existing
+    end
+
+    local ok, checkbox = pcall(CreateFrame, "CheckButton", name, parent,
+        "UICheckButtonTemplate")
+    if not ok or not checkbox then
+        Log("could not create checkbox: " .. tostring(checkbox))
+        return nil
+    end
+
+    checkbox.Text:SetText(label)
+    checkbox:SetChecked(isChecked())
+    checkbox:SetScript("OnClick", function(self)
+        onToggle(self:GetChecked())
+    end)
+
+    return checkbox
+end
+
 local function Setup()
     local searchBox = GetSearchBox()
     if not searchBox then
@@ -415,27 +462,86 @@ local function Setup()
     end
 
     local parent = searchBox:GetParent()
-    local clearButton = CreateButton(CLEAR_BUTTON, "clear tracking", parent)
+    local background = CreateBackground(parent)
+    local clearButton = CreateButton(CLEAR_BUTTON, "Clear Tracking", parent)
     local trackButton = CreateButton(TRACK_BUTTON, "Track Current Zone", parent)
-    local printButton = CreateButton(PRINT_BUTTON, "print ready for turn in", parent)
-    if not clearButton or not trackButton or not printButton then
+    local readyCheckbox = CreateCheckbox(READY_CHECKBOX, "Track - Ready for Turn In", parent,
+        function() return DevMapDB and DevMapDB.showReadySection ~= false end,
+        function(checked)
+            if DevMap.SetReadySectionShown then
+                DevMap:SetReadySectionShown(checked)
+            end
+        end)
+    local countCheckbox = CreateCheckbox(COUNT_CHECKBOX, "Track - Quest Count", parent,
+        function() return DevMapDB and DevMapDB.showQuestCount ~= false end,
+        function(checked)
+            if DevMap.SetQuestCountShown then
+                DevMap:SetQuestCountShown(checked)
+            end
+        end)
+    local minimizeButton = CreateToggleButton(MINIMIZE_BUTTON, "_", parent)
+    local maximizeButton = CreateToggleButton(MAXIMIZE_BUTTON, "+", parent)
+    if not background or not clearButton or not trackButton
+        or not readyCheckbox or not countCheckbox
+        or not minimizeButton or not maximizeButton then
         return false
     end
 
-    -- Anchored to the bottom-left of the quest log panel; the print button
-    -- stacks above the other two.
-    clearButton:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", 6, 6)
+    -- Checkboxes stacked in a column, buttons above them.
+    local checkboxStackHeight = CHECKBOX_HEIGHT * 2 + CHECKBOX_SPACING
+    countCheckbox:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", BOTTOM_INSET, BOTTOM_INSET)
+    readyCheckbox:SetPoint("BOTTOMLEFT", countCheckbox, "TOPLEFT", 0, CHECKBOX_SPACING)
+    clearButton:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", BOTTOM_INSET,
+        BOTTOM_INSET + checkboxStackHeight + BUTTON_GAP)
     trackButton:SetPoint("BOTTOMLEFT", clearButton, "BOTTOMRIGHT", BUTTON_SPACING, 0)
-    printButton:SetPoint("BOTTOMLEFT", clearButton, "TOPLEFT", 0, BUTTON_GAP)
+
+    -- Solid panel behind all elements: left/top padded, right and
+    -- bottom flush with the parent's edges.
+    background:SetPoint("TOPLEFT", clearButton, "TOPLEFT", -4, 6)
+    background:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", 0, 0)
 
     local frameLevel = searchBox:GetFrameLevel() + 5
     clearButton:SetFrameLevel(frameLevel)
     trackButton:SetFrameLevel(frameLevel)
-    printButton:SetFrameLevel(frameLevel)
+    readyCheckbox:SetFrameLevel(frameLevel)
+    countCheckbox:SetFrameLevel(frameLevel)
+    minimizeButton:SetFrameLevel(frameLevel)
+    maximizeButton:SetFrameLevel(frameLevel)
+    background:SetFrameLevel(searchBox:GetFrameLevel())
+
+    -- Minimize/maximize the whole DevMap block.
+    local panelElements = {
+        background, clearButton, trackButton, readyCheckbox, countCheckbox,
+    }
+
+    local function applyMinimized(minimized)
+        for _, frame in ipairs(panelElements) do
+            frame:SetShown(not minimized)
+        end
+        minimizeButton:SetShown(not minimized)
+        maximizeButton:SetShown(minimized)
+    end
+
+    -- Both toggles live in the bottom-right corner of the quest log panel.
+    minimizeButton:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -12, 8)
+    maximizeButton:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -12, 8)
+
+    minimizeButton:SetScript("OnClick", function()
+        DevMapDB = DevMapDB or {}
+        DevMapDB.devMapMinimized = true
+        applyMinimized(true)
+    end)
+
+    maximizeButton:SetScript("OnClick", function()
+        DevMapDB = DevMapDB or {}
+        DevMapDB.devMapMinimized = false
+        applyMinimized(false)
+    end)
+
+    applyMinimized(DevMapDB and DevMapDB.devMapMinimized or false)
 
     clearButton:SetScript("OnClick", OnClearTracking)
     trackButton:SetScript("OnClick", OnTrackCurrentZone)
-    printButton:SetScript("OnClick", PrintReadyForTurnIn)
 
     return true
 end

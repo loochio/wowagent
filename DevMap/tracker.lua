@@ -74,18 +74,33 @@ end
 
 local MODULES = {
     {
+        key = "ready",
         name = "DevMapObjectiveTracker",
         title = "Ready For Turn In",
         uiOrder = 100,
         layout = LayoutReadyForTurnIn,
     },
     {
+        key = "count",
         name = "DevMapQuestCountTracker",
         title = "Quest Count",
         uiOrder = 101,
         layout = LayoutQuestCount,
     },
 }
+
+local SETTING_KEYS = {
+    ready = "showReadySection",
+    count = "showQuestCount",
+}
+
+local function ModuleEnabled(key)
+    local setting = SETTING_KEYS[key]
+    if not setting or not DevMapDB then
+        return true -- sections are on unless explicitly switched off
+    end
+    return DevMapDB[setting] ~= false
+end
 
 local function CreateModule(def)
     local module = CreateFrame("Frame", def.name, ObjectiveTrackerFrame,
@@ -96,6 +111,11 @@ local function CreateModule(def)
     module.uiOrder = def.uiOrder
 
     function module:LayoutContents()
+        -- A suppressed module lays out nothing, so the tracker hides it
+        -- without us having to add/remove it from the container.
+        if self.suppressed then
+            return
+        end
         def.layout(self)
     end
 
@@ -119,11 +139,67 @@ local function EnsureModule()
         if not module then
             module = CreateModule(def)
         end
-        if not ObjectiveTrackerManager:GetContainerForModule(module) then
+
+        -- A disabled section is suppressed (lays out nothing) but stays
+        -- registered, so toggling never disturbs the other sections.
+        local suppressed = (not ModuleEnabled(def.key)) or nil
+        if module.suppressed ~= suppressed then
+            module.suppressed = suppressed
+            module:MarkDirty()
+        end
+
+        if not ObjectiveTrackerFrame:HasModule(module) then
             ObjectiveTrackerManager:SetModuleContainer(module, ObjectiveTrackerFrame)
         end
     end
     return true
+end
+
+-- Called by the checkboxes in the quest log. Persists across sessions.
+local function SetModuleShown(key, shown)
+    DevMapDB = DevMapDB or {}
+    local setting = SETTING_KEYS[key]
+    if setting then
+        DevMapDB[setting] = shown and true or false
+    end
+
+    local def = nil
+    for _, moduleDef in ipairs(MODULES) do
+        if moduleDef.key == key then
+            def = moduleDef
+            break
+        end
+    end
+    if not def then
+        return
+    end
+
+    local module = _G[def.name]
+    if not module then
+        if shown and ObjectiveTrackerFrame and ObjectiveTrackerManager then
+            module = CreateModule(def)
+            ObjectiveTrackerManager:SetModuleContainer(module, ObjectiveTrackerFrame)
+        end
+        return
+    end
+
+    if shown then
+        module.suppressed = nil
+    else
+        module.suppressed = true
+    end
+    module:MarkDirty()
+    if not shown then
+        module:Hide()
+    end
+end
+
+function DevMap:SetReadySectionShown(shown)
+    SetModuleShown("ready", shown)
+end
+
+function DevMap:SetQuestCountShown(shown)
+    SetModuleShown("count", shown)
 end
 
 local retrying = false

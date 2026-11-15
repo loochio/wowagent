@@ -31,11 +31,14 @@ The feature addon. Files load in TOC order; `DevMap.lua` creates the `DevMap` na
 
 ### Quest log buttons (bottom-left of the panel)
 
+The buttons and the Ready For Turn In checkbox sit on a solid black backdrop (`DevMapPanelBackground`, opaque with a subtle border) that stretches to the parent's right and bottom edges.
+
 | Button | Action |
 |---|---|
-| `clear tracking` | Removes every tracked quest (regular + world-quest watches) |
+| `Clear Tracking` | Removes every tracked quest (regular + world-quest watches) |
 | `Track Current Zone` | Clears tracking, then watches quests whose UI map equals the zone you are standing in |
-| `print ready for turn in` | Prints ready-to-hand-in quests in chat, grouped by zone |
+
+A `_` button in the quest log panel's bottom-right corner minimizes the whole DevMap block (buttons, checkboxes and backdrop); a `+` button in the same spot brings it back. The state persists in `DevMapDB.devMapMinimized`. The tracker sections are separate and stay put.
 
 ### Objective tracker sections
 
@@ -45,6 +48,8 @@ The feature addon. Files load in TOC order; `DevMap.lua` creates the `DevMap` na
 | `Quest Count` | `quests in log / max quests`, e.g. `24 / 25` |
 
 Both register as tracker modules with `uiOrder` 100/101 and refresh on `QUEST_LOG_UPDATE`.
+
+Two checkboxes sit under the quest log buttons and toggle their sections independently (persisted in `DevMapDB.showReadySection` / `DevMapDB.showQuestCount`; `DevMap:SetReadySectionShown()` / `DevMap:SetQuestCountShown()`). A disabled section lays out nothing, so the tracker hides it without disturbing the others.
 
 ### DevMap slash commands
 

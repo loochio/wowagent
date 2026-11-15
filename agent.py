@@ -63,6 +63,11 @@ SAVEDVARS_PATH = (
     / "SavedVariables" / "DevAgent.lua"
 )
 
+DEVMAP_SAVEDVARS_PATH = (
+    WOW_ROOT / WOW_FLAVOR / "WTF" / "Account" / WOW_ACCOUNT_NAME
+    / "SavedVariables" / "DevMap.lua"
+)
+
 VERSION_RE = re.compile(r'(local BUILD_VERSION = ")[^"]*(")')
 
 
@@ -249,15 +254,17 @@ def _extract_block(text: str, key: str) -> str:
 
 
 class SavedVarsHandler(FileSystemEventHandler):
-    def __init__(self):
+    def __init__(self, path: Path, addon: str):
+        self.path = path
+        self.addon = addon
         self.seen_errors = 0
         self.seen_loads = 0
         self._prime()
 
     def _read(self):
-        if not SAVEDVARS_PATH.exists():
+        if not self.path.exists():
             return "", ""
-        text = SAVEDVARS_PATH.read_text(encoding="utf-8", errors="replace")
+        text = self.path.read_text(encoding="utf-8", errors="replace")
         return _extract_block(text, "errors"), _extract_block(text, "loadHistory")
 
     def _prime(self):
@@ -267,7 +274,7 @@ class SavedVarsHandler(FileSystemEventHandler):
         self.seen_loads = len(_LOAD_ENTRY_RE.findall(loads_block))
 
     def on_modified(self, event):
-        if event.is_directory or Path(event.src_path) != SAVEDVARS_PATH:
+        if event.is_directory or Path(event.src_path) != self.path:
             return
         # SavedVariables can be mid-write when the event fires; brief settle.
         time.sleep(0.3)
@@ -277,9 +284,9 @@ class SavedVarsHandler(FileSystemEventHandler):
 
         for t, msg in errors[self.seen_errors:]:
             msg = msg.replace('\\"', '"').replace("\\n", "\n")
-            print(f"[wow-error] {t}  {msg}", flush=True)
+            print(f"[wow-error/{self.addon}] {t}  {msg}", flush=True)
         for t, ver in loads[self.seen_loads:]:
-            print(f"[wow-load]  {t}  build={ver}", flush=True)
+            print(f"[wow-load/{self.addon}]  {t}  build={ver}", flush=True)
 
         self.seen_errors = len(errors)
         self.seen_loads = len(loads)
@@ -300,11 +307,12 @@ def main():
     for name in ADDON_NAMES:
         observer.schedule(SourceChangeHandler(name), str(source_dir(name)), recursive=False)
 
-    if SAVEDVARS_PATH.parent.exists():
-        observer.schedule(SavedVarsHandler(), str(SAVEDVARS_PATH.parent), recursive=False)
-    else:
-        log(f"NOTE: {SAVEDVARS_PATH.parent} doesn't exist yet — "
-            "it's created after the addon loads once in-game.")
+    for path, addon in ((SAVEDVARS_PATH, "DevAgent"), (DEVMAP_SAVEDVARS_PATH, "DevMap")):
+        if path.parent.exists():
+            observer.schedule(SavedVarsHandler(path, addon), str(path.parent), recursive=False)
+        else:
+            log(f"NOTE: {path.parent} doesn't exist yet — "
+                "it's created after the addon loads once in-game.")
 
     observer.start()
     log("watching for changes. Ctrl+C to stop.")
